@@ -50,9 +50,15 @@ class MattingNetwork(nn.Module):
             src_sm = self._interpolate(src, scale_factor=downsample_ratio)
         else:
             src_sm = src
-        
+        print("before backdone")
+        print(f"src_sm:{src_sm.shape}")
         f1, f2, f3, f4 = self.backbone(src_sm)
+        print("after backdone| before lraspp")
+        print(f"src_sm:{src_sm.shape} f1:{f1.shape} f2:{f2.shape} f3:{f3.shape} f4:{f4.shape}")
         f4 = self.aspp(f4)
+        print("after aspp| before decoder")
+        print(f"src_sm:{src_sm.shape} f1:{f1.shape} f2:{f2.shape} f3:{f3.shape} f4:{f4.shape}")
+        print(f"r1:{r1.shape} r2:{r2.shape} r3:{r3.shape} r4:{r4.shape}")
         hid, *rec = self.decoder(src_sm, f1, f2, f3, f4, r1, r2, r3, r4)
         
         if not segmentation_pass:
@@ -72,7 +78,7 @@ class MattingNetwork(nn.Module):
             B, T = x.shape[:2]
             x = F.interpolate(x.flatten(0, 1), scale_factor=scale_factor,
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)
-            x = x.unflatten(0, (B, T))
+            x = x.view([B, T] + list(x.shape[1:]))
         else:
             x = F.interpolate(x, scale_factor=scale_factor,
                 mode='bilinear', align_corners=False, recompute_scale_factor=False)

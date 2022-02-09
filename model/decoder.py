@@ -18,14 +18,21 @@ class RecurrentDecoder(nn.Module):
                 s0: Tensor, f1: Tensor, f2: Tensor, f3: Tensor, f4: Tensor,
                 r1: Optional[Tensor], r2: Optional[Tensor],
                 r3: Optional[Tensor], r4: Optional[Tensor]):
+        print("entered decoder")
         s1, s2, s3 = self.avgpool(s0)
+        print(f"s1:{s1.shape} s2:{s2.shape} s3:{s3.shape}")
         x4, r4 = self.decode4(f4, r4)
+        print(f"x4:{x4.shape} r4:{r4.shape}")
         x3, r3 = self.decode3(x4, f3, s3, r3)
+        print(f"x3:{x3.shape} r3:{r3.shape}")
         x2, r2 = self.decode2(x3, f2, s2, r2)
+        print(f"x2:{x2.shape} r2:{r2.shape}")
         x1, r1 = self.decode1(x2, f1, s1, r1)
+        print(f"x1:{x1.shape} r1:{r1.shape}")
         x0 = self.decode0(x1, s0)
+        print(f"x0:{x0.shape}")
         return x0, r1, r2, r3, r4
-    
+
 
 class AvgPool(nn.Module):
     def __init__(self):
@@ -42,9 +49,9 @@ class AvgPool(nn.Module):
         B, T = s0.shape[:2]
         s0 = s0.flatten(0, 1)
         s1, s2, s3 = self.forward_single_frame(s0)
-        s1 = s1.unflatten(0, (B, T))
-        s2 = s2.unflatten(0, (B, T))
-        s3 = s3.unflatten(0, (B, T))
+        s1 = s1.view([B, T] + list(s1.shape[1:]))
+        s2 = s2.view([B, T] + list(s2.shape[1:]))
+        s3 = s3.view([B, T] + list(s3.shape[1:]))
         return s1, s2, s3
     
     def forward(self, s0):
@@ -98,7 +105,7 @@ class UpsamplingBlock(nn.Module):
         x = x[:, :, :H, :W]
         x = torch.cat([x, f, s], dim=1)
         x = self.conv(x)
-        x = x.unflatten(0, (B, T))
+        x = x.view([B, T] + list(x.shape[1:]))
         a, b = x.split(self.out_channels // 2, dim=2)
         b, r = self.gru(b, r)
         x = torch.cat([a, b], dim=2)
@@ -139,7 +146,7 @@ class OutputBlock(nn.Module):
         x = x[:, :, :H, :W]
         x = torch.cat([x, s], dim=1)
         x = self.conv(x)
-        x = x.unflatten(0, (B, T))
+        x = x.view([B, T] + list(x.shape[1:]))
         return x
     
     def forward(self, x, s):
@@ -200,7 +207,8 @@ class Projection(nn.Module):
     
     def forward_time_series(self, x):
         B, T = x.shape[:2]
-        return self.conv(x.flatten(0, 1)).unflatten(0, (B, T))
+        output = self.conv(x.flatten(0, 1))
+        return output.view([B, T] + list(output.shape[1:]))
         
     def forward(self, x):
         if x.ndim == 5:

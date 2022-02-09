@@ -50,8 +50,8 @@ class DeepGuidedFilterRefiner(nn.Module):
             base_fgr.flatten(0, 1),
             base_pha.flatten(0, 1),
             base_hid.flatten(0, 1))
-        fgr = fgr.unflatten(0, (B, T))
-        pha = pha.unflatten(0, (B, T))
+        fgr = fgr.view([B, T] + list(fgr.shape[1:]))
+        pha = pha.view([B, T] + list(pha.shape[1:]))
         return fgr, pha
     
     def forward(self, fine_src, base_src, base_fgr, base_pha, base_hid):

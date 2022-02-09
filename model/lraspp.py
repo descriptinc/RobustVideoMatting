@@ -19,7 +19,8 @@ class LRASPP(nn.Module):
     
     def forward_time_series(self, x):
         B, T = x.shape[:2]
-        x = self.forward_single_frame(x.flatten(0, 1)).unflatten(0, (B, T))
+        x = self.forward_single_frame(x.flatten(0, 1))
+        x = x.view([B, T] + list(x.shape[1:]))
         return x
     
     def forward(self, x):
