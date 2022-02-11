@@ -18,19 +18,19 @@ class RecurrentDecoder(nn.Module):
                 s0: Tensor, f1: Tensor, f2: Tensor, f3: Tensor, f4: Tensor,
                 r1: Optional[Tensor], r2: Optional[Tensor],
                 r3: Optional[Tensor], r4: Optional[Tensor]):
-        print("entered decoder")
+        # print("entered decoder")
         s1, s2, s3 = self.avgpool(s0)
-        print(f"s1:{s1.shape} s2:{s2.shape} s3:{s3.shape}")
+        # print(f"s1:{s1.shape} s2:{s2.shape} s3:{s3.shape}")
         x4, r4 = self.decode4(f4, r4)
-        print(f"x4:{x4.shape} r4:{r4.shape}")
+        # print(f"x4:{x4.shape} r4:{r4.shape}")
         x3, r3 = self.decode3(x4, f3, s3, r3)
-        print(f"x3:{x3.shape} r3:{r3.shape}")
+        # print(f"x3:{x3.shape} r3:{r3.shape}")
         x2, r2 = self.decode2(x3, f2, s2, r2)
-        print(f"x2:{x2.shape} r2:{r2.shape}")
+        # print(f"x2:{x2.shape} r2:{r2.shape}")
         x1, r1 = self.decode1(x2, f1, s1, r1)
-        print(f"x1:{x1.shape} r1:{r1.shape}")
+        # print(f"x1:{x1.shape} r1:{r1.shape}")
         x0 = self.decode0(x1, s0)
-        print(f"x0:{x0.shape}")
+        # print(f"x0:{x0.shape}")
         return x0, r1, r2, r3, r4
 
 

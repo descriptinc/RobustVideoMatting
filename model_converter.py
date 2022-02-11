@@ -81,12 +81,24 @@ def to_onnx(model, save_path, inp_size=DEFAULT_INPUT_SIZE, opset=13):
                 "frame3_hidden_data",
                 "frame4_hidden_data"
             ],  # the model's input names
-            output_names=["output"],  # the model's output names
+            output_names=[
+                "output_fgr",
+                "output_alpha",
+                "output_hidden_data_1",
+                "output_hidden_data_2",
+                "output_hidden_data_3",
+                "output_hidden_data_4",
+            ],  # the model's output names
             dynamic_axes={
                 "video_data": {
                     0: "batch_size",
                 },  # variable length axes
-                "output": {0: "batch_size"},
+                "output_fgr": {0: "batch_size"},
+                "output_alpha": {0: "batch_size"},
+                "output_hidden_data_1": {0: "batch_size"},
+                "output_hidden_data_2": {0: "batch_size"},
+                "output_hidden_data_3": {0: "batch_size"},
+                "output_hidden_data_4": {0: "batch_size"},
             },
             operator_export_type=torch.onnx.OperatorExportTypes.ONNX,
             keep_initializers_as_inputs=False,

@@ -63,13 +63,13 @@ class MobileNetV3LargeEncoder(MobileNetV3):
         B, T = x.shape[:2]
         features = self.forward_single_frame(x.flatten(0, 1))
         features = [f.view([B, T] + list(f.shape[1:])) for f in features]
-        print(f"Mobilenetv3 output:")
-        for idx,feature in enumerate(features):
-            print(f"feature[{idx}]:{feature.shape}")
+        # print(f"Mobilenetv3 output:")
+        # for idx,feature in enumerate(features):
+        #     print(f"feature[{idx}]:{feature.shape}")
         return features
 
     def forward(self, x):
-        print(f"Mobilenetv3 input:{x.shape}")
+        # print(f"Mobilenetv3 input:{x.shape}")
         if x.ndim == 5:
             return self.forward_time_series(x)
         else:

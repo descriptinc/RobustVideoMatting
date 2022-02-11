@@ -46,19 +46,20 @@ class MattingNetwork(nn.Module):
                 downsample_ratio: float = 1,
                 segmentation_pass: bool = False):
         
-        if downsample_ratio != 1:
-            src_sm = self._interpolate(src, scale_factor=downsample_ratio)
-        else:
-            src_sm = src
-        print("before backdone")
-        print(f"src_sm:{src_sm.shape}")
-        f1, f2, f3, f4 = self.backbone(src_sm)
-        print("after backdone| before lraspp")
-        print(f"src_sm:{src_sm.shape} f1:{f1.shape} f2:{f2.shape} f3:{f3.shape} f4:{f4.shape}")
+        # if downsample_ratio != 1:
+        #     src_sm = self._interpolate(src, scale_factor=downsample_ratio)
+        # else:
+        #     src_sm = src
+        # print("before backdone")
+        # print(f"src_sm:{src_sm.shape}")
+        f1, f2, f3, f4 = self.backbone(src)
+        # print("after backdone| before lraspp")
+        # print(f"src_sm:{src_sm.shape} f1:{f1.shape} f2:{f2.shape} f3:{f3.shape} f4:{f4.shape}")
         f4 = self.aspp(f4)
-        print("after aspp| before decoder")
-        print(f"src_sm:{src_sm.shape} f1:{f1.shape} f2:{f2.shape} f3:{f3.shape} f4:{f4.shape}")
-        print(f"r1:{r1.shape} r2:{r2.shape} r3:{r3.shape} r4:{r4.shape}")
+        # print("after aspp| before decoder")
+        # print(f"src_sm:{src_sm.shape} f1:{f1.shape} f2:{f2.shape} f3:{f3.shape} f4:{f4.shape}")
+        # if r1 is not None:
+        #     print(f"r1:{r1.shape} r2:{r2.shape} r3:{r3.shape} r4:{r4.shape}")
         hid, *rec = self.decoder(src_sm, f1, f2, f3, f4, r1, r2, r3, r4)
         
         if not segmentation_pass:
