@@ -130,7 +130,6 @@ def convert_video(inference_fn: Callable,
                 downsample_ratio = auto_downsample_ratio(*src.shape[2:])
             if downsample_ratio != 1:
                 src_sm = interpolate(src, scale_factor=downsample_ratio)
-            import pdb; pdb.set_trace()
             # forward pass
             src_sm = src_sm.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
 
@@ -197,7 +196,6 @@ def tensorrt_inference_fn(device, model_path):
 
     model_path = Path(model_path)
     engine_path = model_path.with_suffix(".trt")
-    import pdb; pdb.set_trace()
     if not engine_path.exists():
         raise FileNotFoundError(f"Unable to find tensorrt engine at {engine_path}")
 
