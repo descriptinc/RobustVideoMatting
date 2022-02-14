@@ -157,6 +157,14 @@ def to_tensorrt(model, save_path: Path, inp_size=DEFAULT_INPUT_SIZE):
     profile.set_shape("frame2_hidden_data", DEFAULT_INPUT_SIZE[2], DEFAULT_INPUT_SIZE[2], DEFAULT_INPUT_SIZE[2])
     profile.set_shape("frame3_hidden_data", DEFAULT_INPUT_SIZE[3], DEFAULT_INPUT_SIZE[3], DEFAULT_INPUT_SIZE[3])
     profile.set_shape("frame4_hidden_data", DEFAULT_INPUT_SIZE[4], DEFAULT_INPUT_SIZE[4], DEFAULT_INPUT_SIZE[4])
+
+    profile.set_shape("output_fgr", (1, 12, 1, 288, 512), (1, 12, 1, 288, 512), (1, 12, 1, 288, 512))
+    profile.set_shape("output_alpha", (1, 12, 1, 288, 512), (1, 12, 1, 288, 512), (1, 12, 1, 288, 512))
+    profile.set_shape("output_hidden_data_1", DEFAULT_INPUT_SIZE[1], DEFAULT_INPUT_SIZE[1], DEFAULT_INPUT_SIZE[1])
+    profile.set_shape("output_hidden_data_2", DEFAULT_INPUT_SIZE[2], DEFAULT_INPUT_SIZE[2], DEFAULT_INPUT_SIZE[2])
+    profile.set_shape("output_hidden_data_3", DEFAULT_INPUT_SIZE[3], DEFAULT_INPUT_SIZE[3], DEFAULT_INPUT_SIZE[3])
+    profile.set_shape("output_hidden_data_4", DEFAULT_INPUT_SIZE[4], DEFAULT_INPUT_SIZE[4], DEFAULT_INPUT_SIZE[4])
+
     # profile.set_shape("downsample_ratio", DEFAULT_INPUT_SIZE[4], DEFAULT_INPUT_SIZE[4], DEFAULT_INPUT_SIZE[4])
     config.add_optimization_profile(profile)
 

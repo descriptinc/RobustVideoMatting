@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from typing import Optional, Tuple, Callable
 from tqdm.auto import tqdm
-from model_converter import get_tensorrt_engine
+from model_converter import get_tensorrt_engine, DEFAULT_INPUT_SIZE
 
 from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
 
@@ -118,14 +118,19 @@ def convert_video(inference_fn: Callable,
     
     try:
         bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
-        rec = [None] * 4
+        # rec = [None] * 4
+        rec = [
+            torch.zeros(DEFAULT_INPUT_SIZE[1]).to(device), 
+            torch.zeros(DEFAULT_INPUT_SIZE[2]).to(device), 
+            torch.zeros(DEFAULT_INPUT_SIZE[3]).to(device), 
+            torch.zeros(DEFAULT_INPUT_SIZE[4]).to(device)]
         for src in reader:
 
             if downsample_ratio is None:
                 downsample_ratio = auto_downsample_ratio(*src.shape[2:])
             if downsample_ratio != 1:
                 src_sm = interpolate(src, scale_factor=downsample_ratio)
-
+            import pdb; pdb.set_trace()
             # forward pass
             src_sm = src_sm.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
 
@@ -192,6 +197,7 @@ def tensorrt_inference_fn(device, model_path):
 
     model_path = Path(model_path)
     engine_path = model_path.with_suffix(".trt")
+    import pdb; pdb.set_trace()
     if not engine_path.exists():
         raise FileNotFoundError(f"Unable to find tensorrt engine at {engine_path}")
 
@@ -212,18 +218,22 @@ def tensorrt_inference_fn(device, model_path):
         output_hidden_data_2 = torch.zeros(DEFAULT_INPUT_SIZE[2])
         output_hidden_data_3 = torch.zeros(DEFAULT_INPUT_SIZE[3])
         output_hidden_data_4 = torch.zeros(DEFAULT_INPUT_SIZE[4])
-        buffers = [None] * 5
+        buffers = [None] * 11
         buffers[input_indices[0]] = video_data.data_ptr()
-        buffers[input_indices[1]] = frame1_hidden_data.data_ptr()
-        buffers[input_indices[2]] = frame2_hidden_data.data_ptr()
-        buffers[input_indices[3]] = frame3_hidden_data.data_ptr()
-        buffers[input_indices[4]] = frame4_hidden_data.data_ptr()
+        # if frame1_hidden_data is not None:
+        buffers[input_indices[1]] = frame1_hidden_data.data_ptr() if frame1_hidden_data is not None else torch.zeros(DEFAULT_INPUT_SIZE[1])
+        # if frame2_hidden_data is not None:
+        buffers[input_indices[2]] = frame2_hidden_data.data_ptr() if frame2_hidden_data is not None else torch.zeros(DEFAULT_INPUT_SIZE[2])
+        # if frame3_hidden_data is not None:
+        buffers[input_indices[3]] = frame3_hidden_data.data_ptr() if frame3_hidden_data is not None else torch.zeros(DEFAULT_INPUT_SIZE[3])
+        # if frame4_hidden_data is not None:
+        buffers[input_indices[4]] = frame4_hidden_data.data_ptr() if frame4_hidden_data is not None else torch.zeros(DEFAULT_INPUT_SIZE[4])
         buffers[output_indices[0]] = output_fgr.data_ptr()
         buffers[output_indices[1]] = output_alpha.data_ptr()
         buffers[output_indices[2]] = output_hidden_data_1.data_ptr()
         buffers[output_indices[3]] = output_hidden_data_2.data_ptr()
         buffers[output_indices[4]] = output_hidden_data_3.data_ptr()
-        buffers[output_indices[4]] = output_hidden_data_4.data_ptr()
+        buffers[output_indices[5]] = output_hidden_data_4.data_ptr()
         status = context.execute_v2(buffers)
         if status is not True:
             raise RuntimeError("TensorRT failed to run")
@@ -281,5 +291,3 @@ if __name__ == '__main__':
         num_workers=args.num_workers,
         progress=not args.disable_progress
     )
-    
-    
