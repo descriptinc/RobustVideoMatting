@@ -25,9 +25,9 @@ from memory_profiler import memory_usage
 from model import MattingNetwork
 from inference import convert_video
 
-TEST_DURATIONS = ['10s']
-TEST_FPS = [24]
-TEST_RESOLUTIONS = [480, 720]
+TEST_DURATIONS = ['10s', '1m', '5m']
+TEST_FPS = [24, 30, 60]
+TEST_RESOLUTIONS = [240, 360, 480, 720]
 # TEST_CONFIGS = ["slow"]
 ASSET_DIR = Path("/u/home/exp/benchmarking_sample_videos")
 
@@ -254,9 +254,6 @@ if __name__ == "__main__":
     argparser.add_argument("model", type=str, help='model used for benchmarking')
     args = argparser.parse_args()
     result = main(args.model, runs=3)
-    result_df = pd.DataFrame(data=result)
+    result_df = pd.DataFrame(data=result).round(2)
     result_df.to_csv("./profile_stats_results.csv")
     print(result_df)
-    # result_df.plot()
-    # pp = pprint.PrettyPrinter(indent=4)
-    # pp.pprint(result)
