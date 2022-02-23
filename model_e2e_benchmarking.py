@@ -28,9 +28,9 @@ from inference import convert_video
 TEST_DURATIONS = ['10s', '1m', '5m']
 TEST_FPS = [24, 30, 60]
 TEST_RESOLUTIONS = [240, 360, 480, 720]
+TEST_DOWNSAMPLING_RATIOS = [0.125, 0.5, 1]
+TEST_PRECISIONS = ['float16', 'float32']
 # TEST_CONFIGS = ["slow"]
-ASSET_DIR = Path("/u/home/exp/benchmarking_sample_videos")
-
 
 @dataclass
 class ProfileStat:
@@ -115,8 +115,6 @@ def profile(
         # no need to collect out from all runs.
         # this is to prevent memory overflow during stress testing.
         fn_kwargs["_collect_out"] = False
-        # if i == 0:
-        #     fn_kwargs["_collect_out"] = True
         mem_prof_res.append(_memory(_latency, fn_args, fn_kwargs))
 
     mem_usage = [x[0] for x in mem_prof_res]
@@ -135,7 +133,7 @@ def profile(
     return {"stats": stats, "output": output}
 
 
-def get_asset_file_name(fps: int, resolution:int, duration: str):
+def get_asset_file_name(asset_dir, fps: int, resolution:int, duration: str):
     """
     Load input audio of specified duration.
 
@@ -145,68 +143,11 @@ def get_asset_file_name(fps: int, resolution:int, duration: str):
     Returns:
         source filename
     """
-    # reseed at every invocation for consistency across multiple tests
-    # wav2wav.funcs.seed(42)
-    # long_audio = AudioSignal(
-    #     torch.tanh(torch.randn(int(SR * duration), dtype=torch.float32)), SR
-    # )
-    asset_file = ASSET_DIR / f"test_fps{fps}_res{resolution}_t{duration}.mp4"
-    # assert asset_file.exists(), f'The test file {asset_file} is not present'
+    # TODO: take care of seeding
+    asset_file = Path(asset_dir) / f"test_fps{fps}_res{resolution}_t{duration}.mp4"
     return asset_file
 
-
-# def enhance(**kwargs):
-#     # important to seed between invocation otherwise output produced is not
-#     # byte equal for the same input. This has to do with bias computation step.
-#     # This step uses a normally distributed tensor. In the absence of seeding,
-#     # this tensor changes and we get different output for the same input.
-#     wav2wav.funcs.seed(42, set_cudnn=kwargs.pop("set_cudnn", False))
-#     return wav2wav.interface.enhance(**kwargs)
-
-
-# def handle_model_conversion(config: str, model_type: ModelType, model_path: Path):
-#     """
-#     If model files are absent, converts an existing pytorch model to given model type.
-#     If pytorch model is absent, recreate the model and save weights at given location.
-#     """
-#     if model_type in [None, ModelType.PYTORCH] and not model_path.exists():
-#         # reseed at every invocation for consistency across multiple tests
-#         wav2wav.funcs.seed(42)
-#         model = wav2wav.modules.Generator(config=config, sample_rate=SR)
-#         model.save(model_path, package=False)
-#     elif model_type == ModelType.ONNX and not model_path.with_suffix(".onnx").exists():
-#         print("Converting to ONNX")
-#         wav2wav.converter.convert(model_path, "onnx")
-#     elif model_type == ModelType.OPENVINO and not (
-#         model_path.with_suffix(".bin").exists()
-#         and model_path.with_suffix(".xml").exists()
-#     ):
-#         print("Converting to OpenVino")
-#         wav2wav.converter.convert(model_path, "openvino")
-#     elif (
-#         model_type == ModelType.TENSORRT and not model_path.with_suffix(".trt").exists()
-#     ):
-#         print("Converting to TensorRT")
-#         wav2wav.converter.convert(model_path, "tensorrt")
-
-
-# def get_model_path(config: str, model_type: ModelType = None) -> Path:
-#     """
-#     Returns saved model path for a given config. If the saved model doesn't exists,
-#     creates a new random saved model.
-
-#     Args:
-#         config: Model config type. Must be one of ``wav2wav.modules.Generator.CONFIGS``.
-
-#     Returns:
-#         Saved model path.
-#     """
-#     model_path = ASSET_DIR / f"{config}.pth"
-#     handle_model_conversion(config, model_type, model_path)
-#     return model_path
-
-
-def main(model_file, runs=5, fpss=TEST_FPS, resolutions=TEST_RESOLUTIONS, durations=TEST_DURATIONS):
+def main(model_file, asset_dir, runs=5):
     result = []
     device = (
         torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -214,35 +155,39 @@ def main(model_file, runs=5, fpss=TEST_FPS, resolutions=TEST_RESOLUTIONS, durati
     model = MattingNetwork("mobilenetv3").cuda()
     model.load_state_dict(torch.load(model_file, map_location=device))
     for duration in durations:
-        for fps in fpss:
-            for res in resolutions:
-                input_asset_file_name = get_asset_file_name(fps, res, duration)
-                if input_asset_file_name.exists():
-                    input_asset_file_name = str(input_asset_file_name)
-                else:
-                    continue
-                output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.mp4'
-                fn_kwargs = {
-                    'model': model, 
-                    'seq_chunk': 14, 
-                    'input_source': input_asset_file_name, 
-                    '_collect_out': False, 
-                    'device': device, 
-                    'output_alpha': output_asset_file_name
-                }
-                prof_out = profile(
-                    convert_video,
-                    runs=runs,
-                    fn_kwargs=fn_kwargs,
-                )
-                # place input for evaluation
-                prof_out["input"] = input_asset_file_name
-                prof_out["fps"] = fps
-                prof_out["resolution"] = res
-                prof_out["duration"] = duration
-                prof_out.update(asdict(prof_out["stats"]))
-                prof_out.pop("stats", None)
-                result.append(prof_out)
+        for fps in TEST_FPS:
+            for res in TEST_RESOLUTIONS:
+                for ratio in TEST_DOWNSAMPLING_RATIO:
+                    for precision in TEST_PRECISIONS:
+                        model = model.to(dtype=precision)
+                        input_asset_file_name = get_asset_file_name(asset_dir, fps, res, duration)
+                        if input_asset_file_name.exists():
+                            input_asset_file_name = str(input_asset_file_name)
+                        else:
+                            continue
+                        output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.mp4'
+                        fn_kwargs = {
+                            'model': model,
+                            'seq_chunk': 14,
+                            'input_source': input_asset_file_name,
+                            '_collect_out': False,
+                            'device': device,
+                            'output_alpha': output_asset_file_name,
+                            'downsample_ratio': downsample_ratio
+                        }
+                        prof_out = profile(
+                            convert_video,
+                            runs=runs,
+                            fn_kwargs=fn_kwargs,
+                        )
+                        # place input for evaluation
+                        prof_out["input"] = input_asset_file_name
+                        prof_out["fps"] = fps
+                        prof_out["resolution"] = res
+                        prof_out["duration"] = duration
+                        prof_out.update(asdict(prof_out["stats"]))
+                        prof_out.pop("stats", None)
+                        result.append(prof_out)
     return result
 
 
@@ -252,8 +197,9 @@ if __name__ == "__main__":
     )
     argparser = argparse.ArgumentParser(description='inputs for benchmarking')
     argparser.add_argument("model", type=str, help='model used for benchmarking')
+    argparser.add_argument("asset_dir", type=str, help='location that contains all test input videos')
     args = argparser.parse_args()
-    result = main(args.model, runs=3)
+    result = main(args.model, args.asset_dir, runs=3)
     result_df = pd.DataFrame(data=result).round(2)
     result_df.to_csv("./profile_stats_results.csv")
     print(result_df)
