@@ -27,8 +27,9 @@ from inference import convert_video
 
 TEST_DURATIONS = ['10s', '1m', '5m']
 TEST_FPS = [24, 30, 60]
-TEST_RESOLUTIONS = [240, 360, 480, 720]
-TEST_DOWNSAMPLING_RATIOS = [0.125, 0.5, 1]
+# TEST_RESOLUTIONS = [240, 360, 480, 720]
+TEST_RESOLUTIONS = [720]
+TEST_DOWNSAMPLING_RATIOS = [0.125, 0.25, 0.5]
 TEST_PRECISIONS = ['float16', 'float32']
 # TEST_CONFIGS = ["slow"]
 
@@ -198,8 +199,9 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description='inputs for benchmarking')
     argparser.add_argument("model", type=str, help='model used for benchmarking')
     argparser.add_argument("asset_dir", type=str, help='location that contains all test input videos')
+    argparser.add_argument("stats_output_file", type=str, help='file that contains the benchmark outputs')
     args = argparser.parse_args()
     result = main(args.model, args.asset_dir, runs=3)
     result_df = pd.DataFrame(data=result).round(2)
-    result_df.to_csv("./profile_stats_results.csv")
+    result_df.to_csv(args.stats_output_file)
     print(result_df)
