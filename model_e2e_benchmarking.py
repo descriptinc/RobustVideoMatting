@@ -26,11 +26,15 @@ from model import MattingNetwork
 from inference import convert_video
 
 TEST_DURATIONS = ['10s', '1m', '5m']
-TEST_FPS = [24, 30, 60]
+# TEST_FPS = [24, 30, 60]
+TEST_FPS = [30]
 # TEST_RESOLUTIONS = [240, 360, 480, 720]
 TEST_RESOLUTIONS = [720]
-TEST_DOWNSAMPLING_RATIOS = [0.125, 0.25, 0.5]
-TEST_PRECISIONS = ['float16', 'float32']
+# TEST_DOWNSAMPLING_RATIOS = [0.125, 0.25, 0.5]
+TEST_DOWNSAMPLING_RATIOS = [0.25]
+# TEST_PRECISIONS = ['float16', 'float32']
+TEST_PRECISIONS = ['float16']
+TEST_NUM_WORKERS = [0, 1, 2, 3, 4]
 # TEST_CONFIGS = ["slow"]
 
 @dataclass
@@ -134,7 +138,7 @@ def profile(
     return {"stats": stats, "output": output}
 
 
-def get_asset_file_name(asset_dir, fps: int, resolution:int, duration: str):
+def get_asset_file_name(asset_dir: str, asset_type: str, fps: int, resolution:int, duration: str):
     """
     Load input audio of specified duration.
 
@@ -145,50 +149,59 @@ def get_asset_file_name(asset_dir, fps: int, resolution:int, duration: str):
         source filename
     """
     # TODO: take care of seeding
-    asset_file = Path(asset_dir) / f"test_fps{fps}_res{resolution}_t{duration}.mp4"
+    if asset_type == 'video':
+        asset_file = Path(asset_dir) / f"test_fps{fps}_res{resolution}_t{duration}.mp4"
+    else:
+        asset_file = Path(asset_dir) / f"test_fps{fps}_res{resolution}_t{duration}_imgs"
     return asset_file
 
-def main(model_file, asset_dir, runs=5):
+def main(model_file, asset_dir, asset_type, runs=5):
     result = []
     device = (
         torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     )
+    precision_values = {"float16": torch.float16, "float32": torch.float32}
     model = MattingNetwork("mobilenetv3").cuda()
     model.load_state_dict(torch.load(model_file, map_location=device))
-    for duration in durations:
+    for duration in TEST_DURATIONS:
         for fps in TEST_FPS:
             for res in TEST_RESOLUTIONS:
-                for ratio in TEST_DOWNSAMPLING_RATIO:
+                for downsample_ratio in TEST_DOWNSAMPLING_RATIOS:
                     for precision in TEST_PRECISIONS:
-                        model = model.to(dtype=precision)
-                        input_asset_file_name = get_asset_file_name(asset_dir, fps, res, duration)
-                        if input_asset_file_name.exists():
-                            input_asset_file_name = str(input_asset_file_name)
-                        else:
-                            continue
-                        output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.mp4'
-                        fn_kwargs = {
-                            'model': model,
-                            'seq_chunk': 14,
-                            'input_source': input_asset_file_name,
-                            '_collect_out': False,
-                            'device': device,
-                            'output_alpha': output_asset_file_name,
-                            'downsample_ratio': downsample_ratio
-                        }
-                        prof_out = profile(
-                            convert_video,
-                            runs=runs,
-                            fn_kwargs=fn_kwargs,
-                        )
-                        # place input for evaluation
-                        prof_out["input"] = input_asset_file_name
-                        prof_out["fps"] = fps
-                        prof_out["resolution"] = res
-                        prof_out["duration"] = duration
-                        prof_out.update(asdict(prof_out["stats"]))
-                        prof_out.pop("stats", None)
-                        result.append(prof_out)
+                        for num_workers in TEST_NUM_WORKERS:
+                            model = model.to(dtype=precision_values[precision])
+                            input_asset_file_name = get_asset_file_name(asset_dir, asset_type, fps, res, duration)
+                            if input_asset_file_name.exists():
+                                input_asset_file_name = str(input_asset_file_name)
+                            else:
+                                continue
+                            output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.mp4'
+                            fn_kwargs = {
+                                'model': model,
+                                'seq_chunk': 14,
+                                'input_source': input_asset_file_name,
+                                '_collect_out': False,
+                                'device': device,
+                                'output_alpha': output_asset_file_name,
+                                'downsample_ratio': downsample_ratio,
+                                'num_workers': num_workers
+                            }
+                            prof_out = profile(
+                                convert_video,
+                                runs=runs,
+                                fn_kwargs=fn_kwargs,
+                            )
+                            # place input for evaluation
+                            prof_out["input"] = input_asset_file_name
+                            prof_out["fps"] = fps
+                            prof_out["resolution"] = res
+                            prof_out["duration"] = duration
+                            prof_out["downsample ratio"] = downsample_ratio
+                            prof_out["precision"] = precision
+                            prof_out["num workers"] = num_workers
+                            prof_out.update(asdict(prof_out["stats"]))
+                            prof_out.pop("stats", None)
+                            result.append(prof_out)
     return result
 
 
@@ -199,9 +212,10 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description='inputs for benchmarking')
     argparser.add_argument("model", type=str, help='model used for benchmarking')
     argparser.add_argument("asset_dir", type=str, help='location that contains all test input videos')
+    argparser.add_argument("asset_type", type=str, help='sequence of images or videos (acceptable values=images/videos)')
     argparser.add_argument("stats_output_file", type=str, help='file that contains the benchmark outputs')
     args = argparser.parse_args()
-    result = main(args.model, args.asset_dir, runs=3)
+    result = main(args.model, args.asset_dir, args.asset_type, runs=3)
     result_df = pd.DataFrame(data=result).round(2)
     result_df.to_csv(args.stats_output_file)
     print(result_df)
