@@ -19,6 +19,8 @@ from torchvision import transforms
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
 
+import math
+
 from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
 
 def convert_video(model,
@@ -30,6 +32,7 @@ def convert_video(model,
                   output_alpha: Optional[str] = None,
                   output_foreground: Optional[str] = None,
                   output_video_mbps: Optional[float] = None,
+                  batch_size: int = 1,
                   seq_chunk: int = 1,
                   num_workers: int = 0,
                   progress: bool = True,
@@ -59,6 +62,7 @@ def convert_video(model,
     assert any([output_composition, output_alpha, output_foreground]), 'Must provide at least one output.'
     assert output_type in ['video', 'png_sequence'], 'Only support "video" and "png_sequence" output modes.'
     assert seq_chunk >= 1, 'Sequence chunk must be >= 1'
+    assert batch_size >= 1, 'Batch size must be >= 1'
     assert num_workers >= 0, 'Number of workers must be >= 0'
     
     # Initialize transform
@@ -75,7 +79,32 @@ def convert_video(model,
         source = VideoReader(input_source, transform)
     else:
         source = ImageSequenceReader(input_source, transform)
-    reader = DataLoader(source, batch_size=seq_chunk, pin_memory=True, num_workers=num_workers)
+    device_count = torch.cuda.device_count()
+    def chunking_collate_fn(batch):
+        batch = torch.stack(batch, dim=0)
+        curr_batch_size = batch.shape[0]
+        if curr_batch_size % seq_chunk == 0:
+            return batch.view([-1, seq_chunk] + list(batch.shape)[1:])
+        else:
+            def maxPrimeFactor(n):
+                max_Prime = n
+                # number must be even
+                while n % 2 == 0:
+                    max_Prime = 2
+                    n /= 2
+                # number must be odd
+                for i in range(3, int(math.sqrt(n)) + 1, 2):
+                    while n % i == 0:
+                        max_Prime = i
+                        n = n / i
+                # prime number greator than two
+                if n > 2:
+                    max_Prime = n
+                return int(max_Prime)
+            seq_length = max(maxPrimeFactor(curr_batch_size), curr_batch_size)
+            return batch.view([-1, seq_length] + list(batch.shape)[1:])
+
+    reader = DataLoader(source, batch_size=batch_size * seq_chunk, pin_memory=True, num_workers=num_workers, collate_fn=chunking_collate_fn)
     
     # Initialize writers
     if output_type == 'video':
@@ -105,12 +134,13 @@ def convert_video(model,
             writer_fgr = ImageSequenceWriter(output_foreground, 'png')
 
     # Inference
-    model = model.eval()
+    model = model.eval().to(device)
     if device is None or dtype is None:
         param = next(model.parameters())
         dtype = param.dtype
         device = param.device
     
+    # model = torch.nn.DataParallel(model, device_ids=[0,1,2,3])
     if (output_composition is not None) and (output_type == 'video'):
         bgr = torch.tensor([120, 255, 155], device=device, dtype=dtype).div(255).view(1, 1, 3, 1, 1)
     
@@ -119,12 +149,21 @@ def convert_video(model,
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
             rec = [None] * 4
             for src in reader:
-
                 if downsample_ratio is None:
-                    downsample_ratio = auto_downsample_ratio(*src.shape[2:])
+                    downsample_ratio = auto_downsample_ratio(*src.shape[3:])
 
-                src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
+                # src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
+                # batch_size = max(1, src.shape[0]//seq_chunk)
+                # seq_length = min(src.shape[0], seq_chunk)
+                # src = src.view([batch_size, seq_length] + list(src.shape)[1:]).to(device, dtype, non_blocking=True) # [B, T, C, H, W]
+                src = src.to(device, dtype, non_blocking=True)
+                if batch_size != src.shape[0]:
+                    for idx,_ in enumerate(rec):
+                        rec[idx] = rec[idx][:src.shape[0]]
                 fgr, pha, *rec = model(src, *rec, downsample_ratio)
+
+                fgr = fgr.view([1, -1] + list(fgr.shape)[2:])
+                pha = pha.view([1, -1] + list(pha.shape)[2:])
 
                 if output_foreground is not None:
                     writer_fgr.write(fgr[0])
@@ -184,24 +223,27 @@ if __name__ == '__main__':
     parser.add_argument('--output-foreground', type=str)
     parser.add_argument('--output-type', type=str, required=True, choices=['video', 'png_sequence'])
     parser.add_argument('--output-video-mbps', type=int, default=1)
+    parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--seq-chunk', type=int, default=1)
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--disable-progress', action='store_true')
     args = parser.parse_args()
     
     converter = Converter(args.variant, args.checkpoint, args.device)
-    converter.convert(
-        input_source=args.input_source,
-        input_resize=args.input_resize,
-        downsample_ratio=args.downsample_ratio,
-        output_type=args.output_type,
-        output_composition=args.output_composition,
-        output_alpha=args.output_alpha,
-        output_foreground=args.output_foreground,
-        output_video_mbps=args.output_video_mbps,
-        seq_chunk=args.seq_chunk,
-        num_workers=args.num_workers,
-        progress=not args.disable_progress
-    )
-    
+    import cProfile
+    # converter.convert(
+    #     input_source=args.input_source,
+    #     input_resize=args.input_resize,
+    #     downsample_ratio=args.downsample_ratio,
+    #     output_type=args.output_type,
+    #     output_composition=args.output_composition,
+    #     output_alpha=args.output_alpha,
+    #     output_foreground=args.output_foreground,
+    #     output_video_mbps=args.output_video_mbps,
+    #     batch_size=args.batch_size,
+    #     seq_chunk=args.seq_chunk,
+    #     num_workers=args.num_workers,
+    #     progress=not args.disable_progress
+    # )
+    cProfile.run('converter.convert(input_source=args.input_source, input_resize=args.input_resize, downsample_ratio=args.downsample_ratio, output_type=args.output_type, output_composition=args.output_composition, output_alpha=args.output_alpha, output_foreground=args.output_foreground, output_video_mbps=args.output_video_mbps, batch_size=args.batch_size, seq_chunk=args.seq_chunk, num_workers=args.num_workers, progress=not args.disable_progress)', 'convert_video_stats')
     
