@@ -60,14 +60,13 @@ def convert_video(model,
         device: Only need to manually provide if model is a TorchScript freezed model.
         dtype: Only need to manually provide if model is a TorchScript freezed model.
     """
-    
     assert downsample_ratio is None or (downsample_ratio > 0 and downsample_ratio <= 1), 'Downsample ratio must be between 0 (exclusive) and 1 (inclusive).'
     assert any([output_composition, output_alpha, output_foreground]), 'Must provide at least one output.'
     assert output_type in ['video', 'png_sequence'], 'Only support "video" and "png_sequence" output modes.'
     assert seq_chunk >= 1, 'Sequence chunk must be >= 1'
     assert batch_size >= 1, 'Batch size must be >= 1'
     assert num_workers >= 0, 'Number of workers must be >= 0'
-    
+    time_prof = {}
     # Initialize transform
     if input_resize is not None:
         transform = transforms.Compose([
@@ -147,13 +146,13 @@ def convert_video(model,
         dtype = param.dtype
         device = param.device
     
-    # model = torch.nn.DataParallel(model, device_ids=[0,1,2,3])
+    # model = torch.nn.DataParallel(model, device_ids=[0,1])
     if (output_composition is not None) and (output_type == 'video'):
         bgr = torch.tensor([120, 255, 155], device=device, dtype=dtype).div(255).view(1, 1, 3, 1, 1)
     
     try:
-        with torch.no_grad():
-        # with torch.inference_mode():
+        # with torch.no_grad():
+        with torch.inference_mode():
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
             rec = [None] * 4
             data_loader_read_tot_time = 0
@@ -178,8 +177,9 @@ def convert_video(model,
                     for idx,_ in enumerate(rec):
                         rec[idx] = rec[idx][:src.shape[0]]
                 model_fwd_pass_start_time_t5 = time.time()
-                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-                    fgr, pha, *rec = model(src, *rec, downsample_ratio)
+                # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+                print("doing forward pass")
+                fgr, pha, *rec = model(src, *rec, downsample_ratio)
                 model_fwd_pass_start_time_t6 = time.time()
                 forward_pass_tot_time += model_fwd_pass_start_time_t6 - model_fwd_pass_start_time_t5
                 fgr = fgr.view([1, -1] + list(fgr.shape)[2:])
@@ -214,16 +214,17 @@ def convert_video(model,
         # end time
         end_time = time.time()
 
-        print(f"dataset creation ///// total time:{data_set_init_time_t1-start_time_t0}")
-        print(f"dataloader creation ///// total time:{data_loader_init_time_t2-data_set_init_time_t1}")
-        print(f"one input read ///// total time:{data_loader_read_tot_time} time per run:{data_loader_read_tot_time/total_runs}")
-        print(f"forward pass ///// total time:{forward_pass_tot_time} time per run:{forward_pass_tot_time/total_runs}")
-        print(f"writing outputs ///// total time:{output_writing_tot_time} time per run:{output_writing_tot_time/total_runs}")
-        print(f"for loop total time:{for_loop_end_time - for_loop_start_time}")
-        print(f"total runs:{total_runs}")
-        print(f"total time:{end_time-start_time_t0}")
-        print(prof.key_averages().table(sort_by="self_cpu_time_total"), row_limit=10)
-        print(prof.key_averages().table(sort_by="cuda_time_total"))
+        time_prof['data_read_total_time'] = data_loader_read_tot_time
+        time_prof['data_read_time_per_batch'] = data_loader_read_tot_time/total_runs
+        time_prof['forward_pass_total_time'] = forward_pass_tot_time
+        time_prof['forward_pass_per_batch'] = forward_pass_tot_time/total_runs
+        time_prof['output_writing_total_time'] = output_writing_tot_time
+        time_prof['output_writing_per_batch'] = output_writing_tot_time/total_runs
+        time_prof['total_runs'] = total_runs
+        time_prof['total_time'] = end_time-start_time_t0
+        return time_prof
+        # print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=10))
+        # print(prof.key_averages().table(sort_by="cuda_time_total"))
 
 
 def auto_downsample_ratio(h, w):
@@ -237,8 +238,8 @@ class Converter:
     def __init__(self, variant: str, checkpoint: str, device: str):
         self.model = MattingNetwork(variant).eval().to(device)
         self.model.load_state_dict(torch.load(checkpoint, map_location=device))
-        self.model = torch.jit.script(self.model)
-        self.model = torch.jit.freeze(self.model)
+        # self.model = torch.jit.script(self.model)
+        # self.model = torch.jit.freeze(self.model)
         self.device = device
     
     def convert(self, *args, **kwargs):

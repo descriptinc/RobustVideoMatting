@@ -25,7 +25,8 @@ from memory_profiler import memory_usage
 from model import MattingNetwork
 from inference import convert_video
 
-TEST_DURATIONS = ['10s', '1m', '5m']
+# TEST_DURATIONS = ['10s', '1m', '5m']
+TEST_DURATIONS = ['1m']
 # TEST_FPS = [24, 30, 60]
 TEST_FPS = [30]
 # TEST_RESOLUTIONS = [240, 360, 480, 720]
@@ -35,7 +36,7 @@ TEST_DOWNSAMPLING_RATIOS = [0.25]
 # TEST_PRECISIONS = ['float16', 'float32']
 TEST_PRECISIONS = ['float16']
 # TEST_NUM_WORKERS = [0, 1, 2, 3, 4]
-TEST_NUM_WORKERS = [1]
+TEST_NUM_WORKERS = [0]
 TEST_BATCH_SIZES = [1, 2, 3, 4]
 # TEST_CONFIGS = ["slow"]
 
@@ -90,7 +91,7 @@ def profile(
 
     # compute end-to-end latency
     def _latency(*_fn_args, **_fn_kwargs):
-        collect_out = _fn_kwargs.pop("_collect_out", False)
+        collect_out = _fn_kwargs.pop("_collect_out", True)
         t1 = time()
         out = fn(*_fn_args, **_fn_kwargs)
         t2 = time()
@@ -114,29 +115,30 @@ def profile(
         )
         return max_mem, max_gpu_mem, fn_res
 
-    stats = ProfileStat()
+    # stats = ProfileStat()
+    stats = {}
     mem_prof_res = []
 
     # combine memory and e-e latency computation
     for i in tqdm(range(runs)):
         # no need to collect out from all runs.
         # this is to prevent memory overflow during stress testing.
-        fn_kwargs["_collect_out"] = False
+        # fn_kwargs["_collect_out"] = False
         mem_prof_res.append(_memory(_latency, fn_args, fn_kwargs))
 
     mem_usage = [x[0] for x in mem_prof_res]
     gpu_mem_usage = [x[1] for x in mem_prof_res]
     latencies = [x[2][0] for x in mem_prof_res]
-
+    sub_latencies = [x[2][1] for x in mem_prof_res]
     # pick any run, choose the output of _latency, extract the output
     output = mem_prof_res[0][2][1]
-
-    stats.latency_mean, stats.latency_std = np.mean(latencies), np.std(latencies)
-    stats.memory_mean, stats.memory_std = np.mean(mem_usage), np.std(mem_usage)
-    stats.gpu_memory_mean, stats.gpu_memory_std = np.mean(gpu_mem_usage), np.std(
-        gpu_mem_usage
-    )
-    stats.runs = runs
+    sub_latency_df = pd.DataFrame(data=sub_latencies)
+    for submodule in sub_latency_df.columns:
+        stats[submodule + '_mean'] = sub_latency_df[submodule].mean()
+    stats['latency_mean'], stats['latency_std'] = np.mean(latencies), np.std(latencies)
+    stats['memory_mean'], stats['memory_std'] = np.mean(mem_usage), np.std(mem_usage)
+    stats['gpu_memory_mean'], stats['gpu_memory_std'] = np.mean(gpu_mem_usage), np.std(gpu_mem_usage)
+    stats['runs'] = runs
     return {"stats": stats, "output": output}
 
 
@@ -174,6 +176,7 @@ def main(model_file, asset_dir, asset_type, runs=5):
                             for batch_size in TEST_BATCH_SIZES:
                                 model = model.to(dtype=precision_values[precision])
                                 input_asset_file_name = get_asset_file_name(asset_dir, asset_type, fps, res, duration)
+                                print(f"input asset file name:{input_asset_file_name}")
                                 if input_asset_file_name.exists():
                                     input_asset_file_name = str(input_asset_file_name)
                                 else:
@@ -184,7 +187,7 @@ def main(model_file, asset_dir, asset_type, runs=5):
                                     'batch_size': batch_size,
                                     'seq_chunk': 14,
                                     'input_source': input_asset_file_name,
-                                    '_collect_out': False,
+                                    '_collect_out': True,
                                     'device': device,
                                     'output_alpha': output_asset_file_name,
                                     'downsample_ratio': downsample_ratio,
@@ -195,7 +198,7 @@ def main(model_file, asset_dir, asset_type, runs=5):
                                     runs=runs,
                                     fn_kwargs=fn_kwargs,
                                 )
-                                place input for evaluation
+
                                 prof_out["input"] = input_asset_file_name
                                 prof_out["fps"] = fps
                                 prof_out["resolution"] = res
@@ -204,15 +207,14 @@ def main(model_file, asset_dir, asset_type, runs=5):
                                 prof_out["precision"] = precision
                                 prof_out["num workers"] = num_workers
                                 prof_out["batch size"] = batch_size
-                                prof_out.update(asdict(prof_out["stats"]))
+                                prof_out.update(prof_out["stats"])
                                 prof_out.pop("stats", None)
                                 result.append(prof_out)
     return result
 
 
 if __name__ == "__main__":
-    import time
-    t0 = time.time()
+    t0 = time()
     print(
         "WARNING: RUN THIS SCRIPT IN COMPLETE ISOLATION! KILL ALL OTHER PROCESSES ON CUDA:0"
     )
@@ -226,7 +228,7 @@ if __name__ == "__main__":
     result_df = pd.DataFrame(data=result).round(2)
     result_df.to_csv(args.stats_output_file)
     print(result_df)
-    t1 = time.time()
+    t1 = time()
 
     total = t1-t0
     print(f"Time taken for profiling:{total}")

@@ -45,12 +45,11 @@ class MattingNetwork(nn.Module):
                 r4: Optional[Tensor] = None,
                 downsample_ratio: float = 1,
                 segmentation_pass: bool = False):
-        
         if downsample_ratio != 1:
             src_sm = self._interpolate(src, scale_factor=downsample_ratio)
         else:
             src_sm = src
-        # print(f"model device: {next(self.parameters()).device} src: {src.device}")
+
         f1, f2, f3, f4 = self.backbone(src_sm)
         f4 = self.aspp(f4)
         hid, *rec = self.decoder(src_sm, f1, f2, f3, f4, r1, r2, r3, r4)
