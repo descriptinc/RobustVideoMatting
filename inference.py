@@ -16,12 +16,15 @@ import torch
 import os
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from torch.profiler import profile, record_function, ProfilerActivity
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
 
 import math
 
 from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
+
+torch.backends.cudnn.benchmark=True
 
 def convert_video(model,
                   input_source: str,
@@ -73,12 +76,15 @@ def convert_video(model,
         ])
     else:
         transform = transforms.ToTensor()
-
+    import time
+    # start time
+    start_time_t0 = time.time()
     # Initialize reader
     if os.path.isfile(input_source):
         source = VideoReader(input_source, transform)
     else:
         source = ImageSequenceReader(input_source, transform)
+    data_set_init_time_t1 = time.time()
     device_count = torch.cuda.device_count()
     def chunking_collate_fn(batch):
         batch = torch.stack(batch, dim=0)
@@ -105,7 +111,8 @@ def convert_video(model,
             return batch.view([-1, seq_length] + list(batch.shape)[1:])
 
     reader = DataLoader(source, batch_size=batch_size * seq_chunk, pin_memory=True, num_workers=num_workers, collate_fn=chunking_collate_fn)
-    
+    data_loader_init_time_t2 = time.time()
+
     # Initialize writers
     if output_type == 'video':
         frame_rate = source.frame_rate if isinstance(source, VideoReader) else 30
@@ -146,9 +153,19 @@ def convert_video(model,
     
     try:
         with torch.no_grad():
+        # with torch.inference_mode():
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
             rec = [None] * 4
+            data_loader_read_tot_time = 0
+            total_runs = 0
+            forward_pass_tot_time = 0
+            data_loader_read_start_time_t3 = time.time()
+            for_loop_start_time = time.time()
+            output_writing_tot_time = 0
             for src in reader:
+                data_loader_read_end_time_t4 = time.time()
+                data_loader_read_tot_time += data_loader_read_end_time_t4 - data_loader_read_start_time_t3
+                total_runs += 1
                 if downsample_ratio is None:
                     downsample_ratio = auto_downsample_ratio(*src.shape[3:])
 
@@ -160,11 +177,15 @@ def convert_video(model,
                 if batch_size != src.shape[0]:
                     for idx,_ in enumerate(rec):
                         rec[idx] = rec[idx][:src.shape[0]]
-                fgr, pha, *rec = model(src, *rec, downsample_ratio)
-
+                model_fwd_pass_start_time_t5 = time.time()
+                with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+                    fgr, pha, *rec = model(src, *rec, downsample_ratio)
+                model_fwd_pass_start_time_t6 = time.time()
+                forward_pass_tot_time += model_fwd_pass_start_time_t6 - model_fwd_pass_start_time_t5
                 fgr = fgr.view([1, -1] + list(fgr.shape)[2:])
                 pha = pha.view([1, -1] + list(pha.shape)[2:])
 
+                output_writing_start_time_t7 = time.time()
                 if output_foreground is not None:
                     writer_fgr.write(fgr[0])
                 if output_alpha is not None:
@@ -176,8 +197,11 @@ def convert_video(model,
                         fgr = fgr * pha.gt(0)
                         com = torch.cat([fgr, pha], dim=-3)
                     writer_com.write(com[0])
-                
+                output_writing_end_time_t8 = time.time()
+                output_writing_tot_time += output_writing_end_time_t8 - output_writing_start_time_t7
                 bar.update(src.size(1))
+                data_loader_read_start_time_t3 = time.time()
+            for_loop_end_time = time.time()
 
     finally:
         # Clean up
@@ -187,6 +211,19 @@ def convert_video(model,
             writer_pha.close()
         if output_foreground is not None:
             writer_fgr.close()
+        # end time
+        end_time = time.time()
+
+        print(f"dataset creation ///// total time:{data_set_init_time_t1-start_time_t0}")
+        print(f"dataloader creation ///// total time:{data_loader_init_time_t2-data_set_init_time_t1}")
+        print(f"one input read ///// total time:{data_loader_read_tot_time} time per run:{data_loader_read_tot_time/total_runs}")
+        print(f"forward pass ///// total time:{forward_pass_tot_time} time per run:{forward_pass_tot_time/total_runs}")
+        print(f"writing outputs ///// total time:{output_writing_tot_time} time per run:{output_writing_tot_time/total_runs}")
+        print(f"for loop total time:{for_loop_end_time - for_loop_start_time}")
+        print(f"total runs:{total_runs}")
+        print(f"total time:{end_time-start_time_t0}")
+        print(prof.key_averages().table(sort_by="self_cpu_time_total"), row_limit=10)
+        print(prof.key_averages().table(sort_by="cuda_time_total"))
 
 
 def auto_downsample_ratio(h, w):
@@ -230,20 +267,18 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     converter = Converter(args.variant, args.checkpoint, args.device)
-    import cProfile
-    # converter.convert(
-    #     input_source=args.input_source,
-    #     input_resize=args.input_resize,
-    #     downsample_ratio=args.downsample_ratio,
-    #     output_type=args.output_type,
-    #     output_composition=args.output_composition,
-    #     output_alpha=args.output_alpha,
-    #     output_foreground=args.output_foreground,
-    #     output_video_mbps=args.output_video_mbps,
-    #     batch_size=args.batch_size,
-    #     seq_chunk=args.seq_chunk,
-    #     num_workers=args.num_workers,
-    #     progress=not args.disable_progress
-    # )
-    cProfile.run('converter.convert(input_source=args.input_source, input_resize=args.input_resize, downsample_ratio=args.downsample_ratio, output_type=args.output_type, output_composition=args.output_composition, output_alpha=args.output_alpha, output_foreground=args.output_foreground, output_video_mbps=args.output_video_mbps, batch_size=args.batch_size, seq_chunk=args.seq_chunk, num_workers=args.num_workers, progress=not args.disable_progress)', 'convert_video_stats')
+    converter.convert(
+        input_source=args.input_source,
+        input_resize=args.input_resize,
+        downsample_ratio=args.downsample_ratio,
+        output_type=args.output_type,
+        output_composition=args.output_composition,
+        output_alpha=args.output_alpha,
+        output_foreground=args.output_foreground,
+        output_video_mbps=args.output_video_mbps,
+        batch_size=args.batch_size,
+        seq_chunk=args.seq_chunk,
+        num_workers=args.num_workers,
+        progress=not args.disable_progress
+    )
     

@@ -190,25 +190,23 @@ def main(model_file, asset_dir, asset_type, runs=5):
                                     'downsample_ratio': downsample_ratio,
                                     'num_workers': num_workers,
                                 }
-                                import cProfile
-                                cProfile.run(convert_video(**fn_kwargs), 'conver_video_stats')
-                                # prof_out = profile(
-                                #     convert_video,
-                                #     runs=runs,
-                                #     fn_kwargs=fn_kwargs,
-                                # )
-                                # place input for evaluation
-                                # prof_out["input"] = input_asset_file_name
-                                # prof_out["fps"] = fps
-                                # prof_out["resolution"] = res
-                                # prof_out["duration"] = duration
-                                # prof_out["downsample ratio"] = downsample_ratio
-                                # prof_out["precision"] = precision
-                                # prof_out["num workers"] = num_workers
-                                # prof_out["batch size"] = batch_size
-                                # prof_out.update(asdict(prof_out["stats"]))
-                                # prof_out.pop("stats", None)
-                                # result.append(prof_out)
+                                prof_out = profile(
+                                    convert_video,
+                                    runs=runs,
+                                    fn_kwargs=fn_kwargs,
+                                )
+                                place input for evaluation
+                                prof_out["input"] = input_asset_file_name
+                                prof_out["fps"] = fps
+                                prof_out["resolution"] = res
+                                prof_out["duration"] = duration
+                                prof_out["downsample ratio"] = downsample_ratio
+                                prof_out["precision"] = precision
+                                prof_out["num workers"] = num_workers
+                                prof_out["batch size"] = batch_size
+                                prof_out.update(asdict(prof_out["stats"]))
+                                prof_out.pop("stats", None)
+                                result.append(prof_out)
     return result
 
 
