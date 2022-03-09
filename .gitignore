@@ -1,0 +1,6 @@
+*.trt
+*.pth
+*.csv
+*.txt
+*.png
+.DS_Store
