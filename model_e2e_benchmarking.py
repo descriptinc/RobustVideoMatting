@@ -36,8 +36,9 @@ TEST_DOWNSAMPLING_RATIOS = [0.25]
 # TEST_PRECISIONS = ['float16', 'float32']
 TEST_PRECISIONS = ['float16']
 # TEST_NUM_WORKERS = [0, 1, 2, 3, 4]
-TEST_NUM_WORKERS = [0]
-TEST_BATCH_SIZES = [1, 2, 3, 4]
+TEST_NUM_WORKERS = [1]
+# TEST_BATCH_SIZES = [1, 2, 3, 4]
+TEST_BATCH_SIZES = [1]
 # TEST_CONFIGS = ["slow"]
 
 @dataclass
@@ -159,7 +160,7 @@ def get_asset_file_name(asset_dir: str, asset_type: str, fps: int, resolution:in
         asset_file = Path(asset_dir) / f"test_fps{fps}_res{resolution}_t{duration}_imgs"
     return asset_file
 
-def main(model_file, asset_dir, asset_type, runs=5):
+def main(model_file, asset_dir, asset_type, output_type, runs=5):
     result = []
     device = (
         torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -181,7 +182,12 @@ def main(model_file, asset_dir, asset_type, runs=5):
                                     input_asset_file_name = str(input_asset_file_name)
                                 else:
                                     continue
-                                output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.mp4'
+                                if output_type == 'png_sequence':
+                                    output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha_imgs'
+                                elif output_type == 'video':
+                                    output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.mp4'
+                                elif output_type == 'hdf5':
+                                    output_asset_file_name = input_asset_file_name.split('.mp4')[0] + '_alpha.hdf5'
                                 fn_kwargs = {
                                     'model': model,
                                     'batch_size': batch_size,
@@ -192,6 +198,7 @@ def main(model_file, asset_dir, asset_type, runs=5):
                                     'output_alpha': output_asset_file_name,
                                     'downsample_ratio': downsample_ratio,
                                     'num_workers': num_workers,
+                                    'output_type': output_type
                                 }
                                 prof_out = profile(
                                     convert_video,
@@ -223,8 +230,9 @@ if __name__ == "__main__":
     argparser.add_argument("asset_dir", type=str, help='location that contains all test input videos')
     argparser.add_argument("asset_type", type=str, help='sequence of images or videos (acceptable values=images/videos)')
     argparser.add_argument("stats_output_file", type=str, help='file that contains the benchmark outputs')
+    argparser.add_argument("output_type", type=str, help='type of the output file')
     args = argparser.parse_args()
-    result = main(args.model, args.asset_dir, args.asset_type, runs=3)
+    result = main(args.model, args.asset_dir, args.asset_type, args.output_type, runs=3)
     result_df = pd.DataFrame(data=result).round(2)
     result_df.to_csv(args.stats_output_file)
     print(result_df)

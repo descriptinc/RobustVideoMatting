@@ -5,7 +5,8 @@ import numpy as np
 from torch.utils.data import Dataset
 from torchvision.transforms.functional import to_pil_image
 from PIL import Image
-
+from pathlib import Path
+import h5py
 
 class VideoReader(Dataset):
     def __init__(self, path, transform=None):
@@ -85,4 +86,20 @@ class ImageSequenceWriter:
             
     def close(self):
         pass
-        
+
+class HDF5Writer:
+    def __init__(self, path, data_shape, dtype):
+        self.path = path
+        self.h5_file = h5py.File(path, 'a')
+        self.dtype = dtype
+        self.data_shape = data_shape
+        self.dataset = self.h5_file.create_dataset('output_data', shape=self.data_shape, dtype=np.float32, maxshape=self.data_shape)
+        self.counter = 0
+
+    def write(self, frames):
+        batch_size = frames.shape[0]
+        self.dataset[self.counter:self.counter+batch_size,:,:,:] = frames
+        self.counter += batch_size
+
+    def close(self):
+        self.h5_file.close()

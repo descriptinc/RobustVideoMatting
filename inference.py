@@ -11,7 +11,7 @@ python inference.py \
     --output-video-mbps 4 \
     --seq-chunk 1
 """
-
+import numpy as np
 import torch
 import os
 from torch.utils.data import DataLoader
@@ -19,10 +19,11 @@ from torchvision import transforms
 from torch.profiler import profile, record_function, ProfilerActivity
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
-
+from tempfile import TemporaryFile
+from pathlib import Path
 import math
 
-from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
+from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter, HDF5Writer
 
 torch.backends.cudnn.benchmark=True
 
@@ -62,7 +63,7 @@ def convert_video(model,
     """
     assert downsample_ratio is None or (downsample_ratio > 0 and downsample_ratio <= 1), 'Downsample ratio must be between 0 (exclusive) and 1 (inclusive).'
     assert any([output_composition, output_alpha, output_foreground]), 'Must provide at least one output.'
-    assert output_type in ['video', 'png_sequence'], 'Only support "video" and "png_sequence" output modes.'
+    assert output_type in ['video', 'png_sequence', 'hdf5'], 'Only support "video" and "png_sequence" output modes.'
     assert seq_chunk >= 1, 'Sequence chunk must be >= 1'
     assert batch_size >= 1, 'Batch size must be >= 1'
     assert num_workers >= 0, 'Number of workers must be >= 0'
@@ -112,44 +113,33 @@ def convert_video(model,
     reader = DataLoader(source, batch_size=batch_size * seq_chunk, pin_memory=True, num_workers=num_workers, collate_fn=chunking_collate_fn)
     data_loader_init_time_t2 = time.time()
 
-    # Initialize writers
-    if output_type == 'video':
-        frame_rate = source.frame_rate if isinstance(source, VideoReader) else 30
-        output_video_mbps = 1 if output_video_mbps is None else output_video_mbps
-        if output_composition is not None:
-            writer_com = VideoWriter(
-                path=output_composition,
-                frame_rate=frame_rate,
-                bit_rate=int(output_video_mbps * 1000000))
-        if output_alpha is not None:
-            writer_pha = VideoWriter(
-                path=output_alpha,
-                frame_rate=frame_rate,
-                bit_rate=int(output_video_mbps * 1000000))
-        if output_foreground is not None:
-            writer_fgr = VideoWriter(
-                path=output_foreground,
-                frame_rate=frame_rate,
-                bit_rate=int(output_video_mbps * 1000000))
-    else:
-        if output_composition is not None:
-            writer_com = ImageSequenceWriter(output_composition, 'png')
-        if output_alpha is not None:
-            writer_pha = ImageSequenceWriter(output_alpha, 'png')
-        if output_foreground is not None:
-            writer_fgr = ImageSequenceWriter(output_foreground, 'png')
-
     # Inference
     model = model.eval().to(device)
     if device is None or dtype is None:
         param = next(model.parameters())
         dtype = param.dtype
         device = param.device
-    
-    # model = torch.nn.DataParallel(model, device_ids=[0,1])
-    if (output_composition is not None) and (output_type == 'video'):
-        bgr = torch.tensor([120, 255, 155], device=device, dtype=dtype).div(255).view(1, 1, 3, 1, 1)
-    
+
+    # Initialize writers
+    if output_type == 'video':
+        frame_rate = source.frame_rate if isinstance(source, VideoReader) else 30
+        output_video_mbps = 1 if output_video_mbps is None else output_video_mbps
+        if output_alpha is not None:
+            writer_pha = VideoWriter(
+                path=output_alpha,
+                frame_rate=frame_rate,
+                bit_rate=int(output_video_mbps * 1000000))
+    elif output_type == 'png_sequence':
+        if output_alpha is not None:
+            writer_pha = ImageSequenceWriter(output_alpha, 'png')
+    else:
+        if output_alpha is not None:
+            dataset_shape = [len(source), 1, 720, 1280]
+            # Remove a file
+            if Path(output_alpha).exists():
+                os.remove(output_alpha)
+            writer_pha = HDF5Writer(output_alpha, dataset_shape, dtype)
+
     try:
         # with torch.no_grad():
         with torch.inference_mode():
@@ -161,24 +151,19 @@ def convert_video(model,
             data_loader_read_start_time_t3 = time.time()
             for_loop_start_time = time.time()
             output_writing_tot_time = 0
+            output_alpha = []
             for src in reader:
                 data_loader_read_end_time_t4 = time.time()
                 data_loader_read_tot_time += data_loader_read_end_time_t4 - data_loader_read_start_time_t3
-                total_runs += 1
                 if downsample_ratio is None:
                     downsample_ratio = auto_downsample_ratio(*src.shape[3:])
 
-                # src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
-                # batch_size = max(1, src.shape[0]//seq_chunk)
-                # seq_length = min(src.shape[0], seq_chunk)
-                # src = src.view([batch_size, seq_length] + list(src.shape)[1:]).to(device, dtype, non_blocking=True) # [B, T, C, H, W]
                 src = src.to(device, dtype, non_blocking=True)
                 if batch_size != src.shape[0]:
                     for idx,_ in enumerate(rec):
                         rec[idx] = rec[idx][:src.shape[0]]
                 model_fwd_pass_start_time_t5 = time.time()
                 # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-                print("doing forward pass")
                 fgr, pha, *rec = model(src, *rec, downsample_ratio)
                 model_fwd_pass_start_time_t6 = time.time()
                 forward_pass_tot_time += model_fwd_pass_start_time_t6 - model_fwd_pass_start_time_t5
@@ -186,34 +171,21 @@ def convert_video(model,
                 pha = pha.view([1, -1] + list(pha.shape)[2:])
 
                 output_writing_start_time_t7 = time.time()
-                if output_foreground is not None:
-                    writer_fgr.write(fgr[0])
                 if output_alpha is not None:
-                    writer_pha.write(pha[0])
-                if output_composition is not None:
-                    if output_type == 'video':
-                        com = fgr * pha + bgr * (1 - pha)
-                    else:
-                        fgr = fgr * pha.gt(0)
-                        com = torch.cat([fgr, pha], dim=-3)
-                    writer_com.write(com[0])
+                    writer_pha.write(pha[0].cpu())
                 output_writing_end_time_t8 = time.time()
                 output_writing_tot_time += output_writing_end_time_t8 - output_writing_start_time_t7
                 bar.update(src.size(1))
                 data_loader_read_start_time_t3 = time.time()
-            for_loop_end_time = time.time()
-
+                total_runs += 1
+    except BaseException as err:
+        print(f"Unexpected {err=}, {type(err)=}")
+        raise err
     finally:
         # Clean up
-        if output_composition is not None:
-            writer_com.close()
         if output_alpha is not None:
             writer_pha.close()
-        if output_foreground is not None:
-            writer_fgr.close()
-        # end time
         end_time = time.time()
-
         time_prof['data_read_total_time'] = data_loader_read_tot_time
         time_prof['data_read_time_per_batch'] = data_loader_read_tot_time/total_runs
         time_prof['forward_pass_total_time'] = forward_pass_tot_time
@@ -223,8 +195,6 @@ def convert_video(model,
         time_prof['total_runs'] = total_runs
         time_prof['total_time'] = end_time-start_time_t0
         return time_prof
-        # print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=10))
-        # print(prof.key_averages().table(sort_by="cuda_time_total"))
 
 
 def auto_downsample_ratio(h, w):
@@ -238,12 +208,12 @@ class Converter:
     def __init__(self, variant: str, checkpoint: str, device: str):
         self.model = MattingNetwork(variant).eval().to(device)
         self.model.load_state_dict(torch.load(checkpoint, map_location=device))
-        # self.model = torch.jit.script(self.model)
-        # self.model = torch.jit.freeze(self.model)
+        self.model = torch.jit.script(self.model)
+        self.model = torch.jit.freeze(self.model)
         self.device = device
     
     def convert(self, *args, **kwargs):
-        convert_video(self.model, device=self.device, dtype=torch.float32, *args, **kwargs)
+        return convert_video(self.model, device=self.device, dtype=torch.float32, *args, **kwargs)
     
 if __name__ == '__main__':
     import argparse
@@ -259,7 +229,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-composition', type=str)
     parser.add_argument('--output-alpha', type=str)
     parser.add_argument('--output-foreground', type=str)
-    parser.add_argument('--output-type', type=str, required=True, choices=['video', 'png_sequence'])
+    parser.add_argument('--output-type', type=str, required=True, choices=['video', 'png_sequence', 'hdf5'])
     parser.add_argument('--output-video-mbps', type=int, default=1)
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--seq-chunk', type=int, default=1)
@@ -268,7 +238,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     converter = Converter(args.variant, args.checkpoint, args.device)
-    converter.convert(
+    time_prof = converter.convert(
         input_source=args.input_source,
         input_resize=args.input_resize,
         downsample_ratio=args.downsample_ratio,
@@ -282,4 +252,4 @@ if __name__ == '__main__':
         num_workers=args.num_workers,
         progress=not args.disable_progress
     )
-    
+    print(time_prof)
